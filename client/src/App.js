@@ -1,108 +1,125 @@
 import React, { Component } from "react";
+import Web3 from "web3";
 import ItemManager from "./contracts/ItemManager.json";
-import Item from "./contracts/Item.json"
-import getWeb3 from "./getWeb3";
-
-import "./App.css";
 
 class App extends Component {
-  state = { cost: 0, itemName: "exampleItem1", loaded: false, index: 0 };
+  state = {
+    loaded: false,
+    cost: 0,
+    itemName: "",
+    itemManager: null,
+    accounts: [],
+    lastItemName: "",       // <-- New
+    lastTransactionHash: "" // <-- New
+  };
 
   componentDidMount = async () => {
     try {
-      // Get network provider and web3 instance.
-      this.web3 = await getWeb3();
+      let web3;
 
-      // Use web3 to get the user's accounts.
-      this.accounts = await this.web3.eth.getAccounts();;
+      if (window.ethereum) {
+        web3 = new Web3(window.ethereum);
+        await window.ethereum.request({ method: "eth_requestAccounts" });
+      } else if (window.web3) {
+        web3 = new Web3(window.web3.currentProvider);
+      } else {
+        web3 = new Web3(new Web3.providers.HttpProvider("http://127.0.0.1:7545"));
+      }
 
-      // Get the contract instance.
-      const networkId = await this.web3.eth.net.getId();
-      this.itemManager = new this.web3.eth.Contract(
+      const accounts = await web3.eth.getAccounts();
+      const networkId = await web3.eth.net.getId();
+      const deployedNetwork = ItemManager.networks[networkId];
+
+      if (!deployedNetwork) {
+        console.error("ItemManager not deployed to detected network.");
+        return;
+      }
+
+      const itemManager = new web3.eth.Contract(
         ItemManager.abi,
-        ItemManager.networks[networkId] && ItemManager.networks[networkId].address,
+        deployedNetwork.address
       );
-      this.item = new this.web3.eth.Contract(
-        Item.abi,
-        Item.networks[networkId] && Item.networks[networkId].address,
-      );
-      this.listenToPaymentEvent();
-     // this.handleSubmit2();
-      this.setState({ loaded: true });
+
+      console.log("Contract Address:", deployedNetwork.address);
+      this.setState({ loaded: true, itemManager, accounts });
     } catch (error) {
-      // Catch any errors for any of the above operations.
-      alert(
-        `Failed to load web3, accounts, or contract. Check console for details.`,
-      );
+      alert("Failed to load web3 or contracts.");
       console.error(error);
     }
   };
 
-
-  handleSubmit = async () => {
-    const { cost, itemName } = this.state;
-    console.log(itemName, cost, this.itemManager);
-    let result = await this.itemManager.methods.createItem(itemName, cost).send({ from: this.accounts[0] });
-    console.log(result);
-    alert("Send " + cost + " Wei to " + result.events.SupplyChainStep.returnValues._address+" with Item index:"+result.events.SupplyChainStep.returnValues._itemIndex);
-  };
-
-  handleSubmit2 = async () => {
-    const { index } = this.state;
-   
-    let result = await this.itemManager.methods.triggerDelivery(index).send({ from: this.accounts[0] });
-    console.log(result);
-  
-    
-  }
-
-  
-
   handleInputChange = (event) => {
     const target = event.target;
-    const value = target.type === 'checkbox' ? target.checked : target.value;
-    const name = target.name;
+    const value = target.name === "cost" ? parseInt(target.value) : target.value;
     this.setState({
-      [name]: value
+      [target.name]: value
     });
-  }
+  };
 
-  listenToPaymentEvent = () => {
-    let self = this;
-    this.itemManager.events.SupplyChainStep().on("data", async function(evt) {
-    if(evt.returnValues._step == 1) {
-     let item = await self.itemManager.methods.items(evt.returnValues._itemIndex).call();
-    console.log(item);
-    console.log("alert1");
-    alert("Item " + item._identifier + +" with Item index: "+item._itemIndex + " was paid, deliver it now!"); };
-    if(evt.returnValues._step == 2) {
-      let item = await self.itemManager.methods.items(evt.returnValues._itemIndex).call();
-     console.log(item);
-     console.log("alert2");
-     alert("Item " + item._identifier + " was delivered, ask for reviews from user "); };
-      //console.log("Item was paid, deliver it now!");
-     // console.log(evt);
-     // console.log("alert2");
-    });
-  }
+  handleSubmit = async () => {
+    const { itemManager, accounts, itemName, cost } = this.state;
+    try {
+      const result = await itemManager.methods
+        .createItem(itemName, cost)
+        .send({ from: accounts[0] });
+
+      const txHash = result.transactionHash;
+
+      // Update state with last transaction info
+      this.setState({
+        lastItemName: itemName,
+        lastTransactionHash: txHash
+      });
+
+      alert(`Item "${itemName}" created successfully.\nTransaction Hash: ${txHash}`);
+    } catch (err) {
+      console.error(err);
+      alert("Transaction failed.");
+    }
+  };
 
   render() {
-    if (!this.state.loaded) {
+    const { loaded, itemName, cost, lastItemName, lastTransactionHash } = this.state;
+
+    if (!loaded) {
       return <div>Loading Web3, accounts, and contract...</div>;
     }
+
     return (
-      <div className="App">
-       <div className="temp"> <h1>Supply Chain Management Blockchain D-App!</h1> </div> 
-        <h2 className="temp2">Add desired Item to sell with it's Cost and Name:</h2><div className="temp6">
-      Cost of Item: <input type="text" name="cost"  value={this.state.cost} onChange={this.handleInputChange} />
-        Item Name: <input type="text" name="itemName" className="temp4" value={this.state.itemName} onChange={this.handleInputChange} />
-        <button type="button" className="button-14" onClick={this.handleSubmit}>Create new Item</button></div><div className="temp5">
-        <h2 className="temp2">Mark the Item that has been delivered by Entering the Index, VISIT RINKEBY ETHERSCAN FOR MORE:</h2>
-        Delivered Item: <input type="text" name="index" value={this.state.index} onChange={this.handleInputChange} />
-        <button type="button" className="button-14" onClick={this.handleSubmit2}>Mark Delivered</button></div>
+      <div style={{ padding: "20px" }}>
+        <h1>Supply Chain Blockchain App</h1>
+
+        <h2>Create New Item</h2>
+        <label>Item Name:</label>
+        <input
+          type="text"
+          name="itemName"
+          value={itemName}
+          onChange={this.handleInputChange}
+        />
+        <br />
+
+        <label>Cost (in Wei):</label>
+        <input
+          type="number"
+          name="cost"
+          value={cost}
+          onChange={this.handleInputChange}
+        />
+        <br />
+
+        <button onClick={this.handleSubmit}>Create Item</button>
+
+        {lastItemName && lastTransactionHash && (
+          <div style={{ marginTop: "20px", background: "#f5f5f5", padding: "10px" }}>
+            <h3>✅ Last Transaction</h3>
+            <p><strong>Item:</strong> {lastItemName}</p>
+            <p><strong>Transaction Hash:</strong> <code>{lastTransactionHash}</code></p>
+          </div>
+        )}
       </div>
     );
   }
 }
 
-  export default App;
+export default App;
